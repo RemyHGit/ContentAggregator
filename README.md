@@ -15,8 +15,10 @@ And then you can run the project, **HOWEVER** you need to create a .env file wit
 ```python
 TMDB_API_KEY = "[your TMDB api key]"
 LOCAL_MONGO_URI = "mongodb://localhost:27017/"
-TMDB_DB_NAME = "tmdb"
+DB_NAME = "msg_db"
 IMAGES_DIR = "images"
+TWITCH_ID = "[your TWITCH_ID]"
+TWITCH_SECRET = "[your TWITCH_SECRET]"
 ```
 
 Then, run conj.py and it should works

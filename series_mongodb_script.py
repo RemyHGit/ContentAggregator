@@ -17,7 +17,7 @@ load_dotenv()
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 LOCAL_MONGO_URI = os.getenv("LOCAL_MONGO_URI")
-TMDB_DB_NAME = os.getenv("TMDB_DB_NAME")
+DB_NAME = os.getenv("DB_NAME")
 IMAGES_DIR = os.getenv("IMAGES_DIR")
 
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
@@ -27,8 +27,8 @@ headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY
 def fetch_db_collection():
     conn = os.getenv("MONGODB_URI", LOCAL_MONGO_URI)
     client = MongoClient(conn)
-    db = client[TMDB_DB_NAME]
-    return db["series"]
+    db = client[DB_NAME]
+    return db["tmdb_series"]
 
 
 # FETCH ALL SERIES FROM THE DATABASE
@@ -82,7 +82,7 @@ def fetch_most_recent_file_name():
 def fetch_series_from_mongodb():
     mongodb_uri = os.getenv("MONGODB_URI", LOCAL_MONGO_URI)
     client = MongoClient(mongodb_uri)    
-    db = client[TMDB_DB_NAME]
+    db = client[DB_NAME]
     collection = db["series"]
 
     series_data = []
