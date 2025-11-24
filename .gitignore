@@ -1,6 +1,7 @@
 .dist/
 __pycache__/
 .env
+.venv
 images/
 venv/
 *.pyc

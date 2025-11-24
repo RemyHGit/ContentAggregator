@@ -122,4 +122,4 @@ def sync_all_games_threaded(parts: int = 4, max_workers: int | None = None):
 
 # main
 if __name__ == "__main__":
-    sync_all_games_threaded(parts=4)
+    sync_all_games_threaded()

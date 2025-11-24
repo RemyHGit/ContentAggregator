@@ -1,4 +1,4 @@
 pymongo==4.0.2  # MongoDB driver
 requests==2.26.0  # HTTP library
-glob2==0.7  # File pattern matching(
+glob2==0.7  
 python-dotenv

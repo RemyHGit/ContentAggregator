@@ -2,7 +2,7 @@
 TMDB MongoDB Fetcher is a project to fetch all the movies and series from the famous website **"TMDB"** and store it to a MongoDB Database for further uses.
 
 ## How it works 
-That project works as follow : getting public movies id ; which anyone can download, clean them, ask the TMDB API for getting more details (useful ones), download every poster of movies / series if that's what you want and put all of theses data in a MongoDB database.
+That project works as follow : getting public movies id ; which anyone can download, clean them, ask the TMDB and IGDB API for getting more details (useful ones), download every poster of movies / series / games if that's what you want and put all of theses data in a MongoDB database.
 
 All that thing is working with threads, so fetching movies and series is simultaneous.
 
@@ -26,7 +26,7 @@ Then, run conj.py and it should works
 ## Future for that project
 For the nexts weeks, I plan on automatize it with a more dedicated way, like airflow for example.
 
-I plan for getting more data, like games for exemple.
+I plan for getting more data, like books for exemple.
 
 Adjust the code so that you get what you want, like "i only want movies" ;  "okay, here we go:".
 

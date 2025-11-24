@@ -72,7 +72,9 @@ def fetch_most_recent_file():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return files[-1]
 
-
+# ---------------------------
+# Files: most recent fN.json availble (locally)
+# ---------------------------
 def fetch_most_recent_file_name():
     if not os.path.exists("app/series_files"):
         os.makedirs("app/series_files")
@@ -87,7 +89,7 @@ def fetch_most_recent_file_name():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return os.path.splitext(os.path.basename(files[-1]))[0]
 
-
+# File's lenght
 def fetch_tmdb_series_length():
     path = fetch_most_recent_file()
     if not path:
@@ -95,7 +97,7 @@ def fetch_tmdb_series_length():
     with open(path, "r", encoding="utf-8") as f:
         return sum(1 for _ in f)
 
-
+# Partitionize [parts] the number of line to process
 def partitions(total: int, parts: int):
     size = math.ceil(total / parts)
     out = []
@@ -207,11 +209,13 @@ def dl_recent_series_ids():
                 + ".json"
             )
 
+        # Combine the responses directly into the final file
         out_path = f"{os.curdir}/app/series_files/{f_name}"
         with open(out_path, "wb") as f_out:
             f_out.write(gzip.decompress(response.content))
             f_out.write(gzip.decompress(response_a.content))
-
+            
+        # Check if there are more than 2 files in the directoryn, delete the oldest one
         files = glob.glob(os.path.join(os.curdir + "/app/series_files/", "f*.json"))
         if len(files) > 2:
             files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
@@ -254,9 +258,9 @@ def dl_serie_images():
 
 
 # ---------------------------
-# Build doc once (for UPSERT)
+# Series doc
 # ---------------------------
-def build_serie_doc(l_s, details):
+def serie_doc(l_s, details):
     return {
         "id": l_s["id"],
         "original_name": l_s["original_name"],
@@ -294,7 +298,7 @@ def build_serie_doc(l_s, details):
 # ---------------------------
 # THREADED compare file vs DB with UPSERT
 # ---------------------------
-def compare_series_file_db_add_db_threaded(parts: int = 4, only_new: bool = True):
+def sync_series_file_add_db_threaded(parts: int = 4, only_new: bool = True):
     """Threaded compare+UPSERT for series.
 
     only_new=True  -> skip ids <= last_id (current optimization)
@@ -350,7 +354,7 @@ def compare_series_file_db_add_db_threaded(parts: int = 4, only_new: bool = True
 
             details = fetch_serie_details(sid)
             if details and isinstance(details.get("id"), int):
-                doc = build_serie_doc(l_s, details)
+                doc = serie_doc(l_s, details)
                 c.update_one({"id": sid}, {"$set": doc}, upsert=True)
                 print(
                     f"[Part {part}] Serie UPSERTED \"{l_s.get('original_name', sid)}\" with id \"{sid}\""
@@ -379,12 +383,7 @@ def compare_series_file_db_add_db_threaded(parts: int = 4, only_new: bool = True
             print(f"[DONE] Part {p} ({s}-{e}) upserted {upserted} series.")
 
     print(f"[DONE] Total series upserted this run: {total_upserted}")
-
-
-
-# ---------------------------
-# Main
-# ---------------------------
-if __name__ == "__main__":
-    # Choose how many parts/threads you want, like games & movies
-    compare_series_file_db_add_db_threaded(parts=10)
+    
+    if __name__ == "__main__":
+        # You may adjust parts and only_new as needed
+        sync_series_file_add_db_threaded(parts=10, only_new=True)
