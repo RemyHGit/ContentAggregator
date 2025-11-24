@@ -11,7 +11,7 @@ load_dotenv()
 TWITCH_ID = os.getenv("TWITCH_ID")
 TWITCH_SECRET = os.getenv("TWITCH_SECRET")
 MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = os.getenv("DB_NAME", "igdb")
+DB_NAME = os.getenv("DB_NAME")
 COLLECTION = "igdb_games"
 
 IGDB_GAMES_URL = "https://api.igdb.com/v4/games"

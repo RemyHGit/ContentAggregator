@@ -1,34 +1,43 @@
-import requests
+import os, sys, math, requests
 import json
-from pymongo import MongoClient
-import os
-import sys
+from pymongo import MongoClient, UpdateOne, ASCENDING
 import glob
 import gzip
 import re
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
-# Set the default encoding to UTF-8
+# ---------------------------
+# Boot / env
+# ---------------------------
 sys.stdout.reconfigure(encoding="utf-8")
-
-# Load environment variables from .env file
 load_dotenv()
 
+
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
-LOCAL_MONGO_URI = os.getenv("MONGO_URI")
+if not TMDB_API_KEY:
+    raise RuntimeError("TMDB_API_KEY is not set in your .env")
+
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    raise RuntimeError("MONGO_URI is not set in your .env")
+
 DB_NAME = os.getenv("DB_NAME")
-IMAGES_DIR = os.getenv("IMAGES_DIR")
+if not DB_NAME:
+    raise RuntimeError("DB_NAME is not set in your .env")
+
+COLLECTION = "tmdb_movies"
 
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
 
 
 # FETCH THE DATABASE COLLECTION
 def fetch_db_collection():
-    conn = os.getenv("MONGODB_URI", LOCAL_MONGO_URI)
-    client = MongoClient(conn)
-    db = client[DB_NAME]
-    return db["tmdb_movies"]
+    mongo = MongoClient(MONGO_URI)
+    collection = mongo[DB_NAME][COLLECTION]
+    collection.create_index([("id", ASCENDING)], unique=True)
+    return collection
 
 
 # FETCH ALL MOVIES FROM THE DATABASE
@@ -37,46 +46,76 @@ def fetch_db_movies():
     return c.find()
 
 
+def build_movie_doc(l_m, details):
+    return {
+        "id": l_m["id"],
+        "original_title": l_m["original_title"],
+        "poster_path": details["poster_path"] if details.get("poster_path") is not None else None,
+        "all_titles": fetch_all_titles(l_m["id"]),
+        "adult": l_m["adult"],
+        "overview": details["overview"] if details.get("overview") is not None else None,
+        "release_date": details["release_date"] if details.get("release_date") is not None else None,
+        "runtime": details["runtime"] if details.get("runtime") is not None else None,
+        "genres": details["genres"] if details.get("genres") is not None else None,
+        "spoken_languages": details["spoken_languages"] if details.get("spoken_languages") is not None else None,
+        "production_companies": details["production_companies"] if details.get("production_companies") is not None else None,
+        "production_countries": details["production_countries"] if details.get("production_countries") is not None else None,
+        "status": details["status"] if details.get("status") is not None else None,
+        "popularity": details["popularity"] if details.get("popularity") is not None else None,
+        "video": details["video"] if details.get("video") is not None else None,
+        "backdrop_path": details["backdrop_path"] if details.get("backdrop_path") is not None else None,
+        "budget": details["budget"] if details.get("budget") is not None else None,
+        "origin_country": details["origin_country"] if details.get("origin_country") is not None else None,
+        "original_language": details["original_language"] if details.get("original_language") is not None else None,
+    }
+
+
 # FETCH THE MOST RECENT FILE
 def fetch_most_recent_file():
-
-    # Create the directory if it doesn't exist
     if not os.path.exists("app/movies_files"):
         os.makedirs("app/movies_files")
     
-    # Get a list of all files in the directory with the specified pattern
     files = glob.glob(os.path.join(os.curdir, "app/movies_files", "f*.json"))
 
     if not files:
         print("fetch_most_recent_file: No files found")
         return None
 
-    # Extract the number after the letter "f" from the file name and sort the files based on that number
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
-
-    # Return the file with the highest number after the letter "f"
     return files[-1]
 
 
 # FETCH THE MOST RECENT FILE NAME
 def fetch_most_recent_file_name():
-    
-    # Create the directory if it doesn't exist
     if not os.path.exists("app/movies_files"):
         os.makedirs("app/movies_files")
     
-    # Get a list of all files in the directory with the specified pattern
     files = glob.glob(os.path.join(os.path.abspath(os.curdir), "app/movies_files", "f*.json"))
 
-    # If no files match the pattern, return None
     if not files:
         return None
 
-    # Extract the number after the letter "f" from the file name and sort the files based on that number
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
-
-    # Return the file name with the highest number after the letter "f" without the extension
     return os.path.splitext(os.path.basename(files[-1]))[0]
+
+
+def fetch_tmdb_movies_length():
+    path = fetch_most_recent_file()
+    if not path:
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
+
+def partitions(total: int, parts: int):
+    size = math.ceil(total / parts)
+    out = []
+    for i in range(parts):
+        start = i * size
+        end = min(start + size, total)
+        if start < end:
+            out.append((start, end, i + 1))
+    return out
 
 
 # FETCH MOVIES FROM MONGODB
@@ -485,3 +524,90 @@ def dl_movie_images():
                 print(f"Image downloaded for movie \"{m['original_title']}\" with id \"{m['id']}\"")
             else:
                 print(f"Error downloading image for movie \"{m['original_title']}\" with id \"{m['id']}\"")
+
+
+def compare_movies_file_db_add_db_threaded(parts: int = 4, only_new: bool = True):
+    """Threaded compare+UPSERT for movies."""
+
+    c = fetch_db_collection()
+
+    # 1) Last id & download latest file
+    try:
+        last_id = fetch_last_known_movie_id()
+        print(f"Last known movie ID in the database: {last_id}")
+    except Exception as e:
+        print(f"Error fetching last known movie ID: {e}")
+        last_id = None
+
+    dl_recent_movie_ids()
+
+    movie_file = fetch_most_recent_file()
+    if movie_file is None:
+        print("No movie file has been downloaded, try checking back the API caller!")
+        return
+
+    # 2) Read file once
+    with open(movie_file, "r", encoding="utf-8") as f:
+        file_lines = f.readlines()
+
+    db_len = c.count_documents({})
+    file_len = len(file_lines)
+    print(
+        f" Number of movies in the database: {db_len}"
+        + f"\n Number of movies in the file: {file_len}"
+    )
+
+    ranges = partitions(file_len, parts)
+    print(f"[INFO] Using {len(ranges)} partitions for TMDB movies file of {file_len} lines")
+
+    def worker(start: int, end: int, part: int) -> int:
+        upserted = 0
+        for idx in range(start, end):
+            line = file_lines[idx]
+            try:
+                l_m = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"[Part {part}] JSON error at line {idx}")
+                continue
+
+            mid = l_m.get("id")
+            if not isinstance(mid, int):
+                continue
+
+            if only_new and last_id is not None and mid <= last_id:
+                continue
+
+            details = fetch_movie_details(mid)
+            if details and isinstance(details.get("id"), int):
+                doc = build_movie_doc(l_m, details)
+                c.update_one({"id": mid}, {"$set": doc}, upsert=True)
+                print(
+                    f"[Part {part}] Movie UPSERTED \"{l_m.get('original_title', mid)}\" with id \"{mid}\""
+                )
+                upserted += 1
+            elif not details:
+                db_existing_movie = c.find_one({"id": mid})
+                if db_existing_movie:
+                    c.delete_one({"id": mid})
+                    print(
+                        f"[Part {part}] Movie DELETED \"{l_m.get('original_title', mid)}\" with id \"{mid}\""
+                    )
+        return upserted
+
+    total_upserted = 0
+    with ThreadPoolExecutor(max_workers=parts) as pool:
+        futures = {
+            pool.submit(worker, s, e, p): (s, e, p)
+            for (s, e, p) in ranges
+        }
+        for fut in as_completed(futures):
+            s, e, p = futures[fut]
+            upserted = fut.result()
+            total_upserted += upserted
+            print(f"[DONE] Part {p} ({s}-{e}) upserted {upserted} movies.")
+
+    print(f"[DONE] Total movies upserted this run: {total_upserted}")
+
+
+if __name__ == "__main__":
+    compare_movies_file_db_add_db_threaded(parts=10)
