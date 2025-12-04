@@ -130,8 +130,7 @@ def fetch_all_titles(movie_id: int):
     
 
 def fetch_movies_from_mongodb():
-    mongodb_uri = os.getenv("MONGODB_URI", MONGO_URI)
-    client = MongoClient(mongodb_uri)    
+    client = MongoClient(MONGO_URI)    
     db = client[DB_NAME]
     collection = db["movies"]
 

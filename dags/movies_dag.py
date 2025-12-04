@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import sys
 import os
 
-# Ajouter le chemin des plugins pour les imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'plugins'))
 
 from movies_mongodb_script import sync_movies_file_add_db_threaded
@@ -21,8 +20,8 @@ default_args = {
 dag = DAG(
     'sync_tmdb_movies',
     default_args=default_args,
-    description='Synchronise les films depuis TMDB vers MongoDB',
-    schedule_interval=timedelta(days=1),  # Exécution quotidienne
+    description='Synch movies from TMDB to a local MongoDB',
+    schedule_interval=timedelta(days=1),
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['tmdb', 'movies', 'mongodb'],

@@ -1,3 +1,13 @@
+x-airflow-common:
+  &airflow-common
+  build: .
+  env_file:
+    - .env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+
 services:
   postgres:
     image: postgres:15
@@ -16,58 +26,60 @@ services:
       timeout: 5s
       retries: 5
 
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
   airflow-init:
-    image: apache/airflow:2.10.2
+    <<: *airflow-common
     container_name: airflow_init
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-    volumes:
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher:/opt/airflow
-    entrypoint: /bin/bash
+    entrypoint: bash
     command: -c "
-      pip install --no-cache-dir \
-        --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.2/constraints-3.12.txt \
-        -r /opt/airflow/requirements.txt && \
-      airflow db upgrade && \
-      airflow users create -u admin -p admin -r Admin -e admin@example.com -f Admin -l User"
+      airflow db init &&
+      airflow users create \
+        -u admin \
+        -p admin \
+        -r Admin \
+        -e admin@example.com \
+        -f Admin \
+        -l User
+      "
 
   airflow-webserver:
-    image: apache/airflow:2.10.2
+    <<: *airflow-common
+    image: airflow-custom:2.10.2
     container_name: airflow_webserver
     depends_on:
       airflow-init:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-    volumes:
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/dags:/opt/airflow/dags
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/logs:/opt/airflow/logs
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/plugins:/opt/airflow/plugins
+      mongo:
+        condition: service_started
     ports:
       - "8080:8080"
     command: webserver
 
   airflow-scheduler:
-    image: apache/airflow:2.10.2
+    <<: *airflow-common
+    image: airflow-custom:2.10.2
     container_name: airflow_scheduler
     depends_on:
-      - airflow-webserver
-      - postgres
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-    volumes:
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/dags:/opt/airflow/dags
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/logs:/opt/airflow/logs
-      - C:\Users\remyh\Documents\dev\TMDB-MongoDB-Fetcher/plugins:/opt/airflow/plugins
+      airflow-webserver:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_started
     command: scheduler
 
 volumes:
   postgres_db:
+  mongo_data:

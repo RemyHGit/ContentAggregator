@@ -9,11 +9,22 @@ sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv()
 
 TWITCH_ID = os.getenv("TWITCH_ID")
-TWITCH_SECRET = os.getenv("TWITCH_SECRET")
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = os.getenv("DB_NAME")
-COLLECTION = "igdb_games"
+if not TWITCH_ID:
+    raise RuntimeError("TWITCH_ID is not set in your .env")
 
+TWITCH_SECRET = os.getenv("TWITCH_SECRET")
+if not TWITCH_SECRET:
+    raise RuntimeError("TWITCH_SECRET is not set in your .env")
+
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    raise RuntimeError("MONGO_URI is not set in your .env")
+
+DB_NAME = os.getenv("DB_NAME")
+if not DB_NAME:
+    raise RuntimeError("DB_NAME is not set in your .env")
+
+COLLECTION = "igdb_games"
 IGDB_GAMES_URL = "https://api.igdb.com/v4/games"
 COUNT_URL = "https://api.igdb.com/v4/games/count"
 BATCH_SIZE = 500
