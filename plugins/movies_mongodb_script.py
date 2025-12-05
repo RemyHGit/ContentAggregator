@@ -8,12 +8,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
-# ---------------------------
-# Boot / env
-# ---------------------------
+# boot
 sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv()
-
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 if not TMDB_API_KEY:
@@ -31,25 +28,18 @@ COLLECTION = "tmdb_movies"
 
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
 
-
-# ---------------------------
-# Mongo helpers
-# ---------------------------
+# mongo
 def fetch_db_collection():
     mongo = MongoClient(MONGO_URI)
     collection = mongo[DB_NAME][COLLECTION]
     collection.create_index([("id", ASCENDING)], unique=True)
     return collection
 
-
 def fetch_db_movies():
     c = fetch_db_collection()
     return c.find()
 
-
-# ---------------------------
-# Files: latest fN.json for movies
-# ---------------------------
+# files
 def fetch_most_recent_file():
     if not os.path.exists("app/movies_files"):
         os.makedirs("app/movies_files")
@@ -63,10 +53,6 @@ def fetch_most_recent_file():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return files[-1]
 
-
-# ---------------------------
-# Files: most recent fN.json availble (locally)
-# ---------------------------
 def fetch_most_recent_file_name():
     if not os.path.exists("app/movies_files"):
         os.makedirs("app/movies_files")
@@ -79,7 +65,6 @@ def fetch_most_recent_file_name():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return os.path.splitext(os.path.basename(files[-1]))[0]
 
-# File's lenght
 def fetch_tmdb_movies_length():
     path = fetch_most_recent_file()
     if not path:
@@ -87,7 +72,7 @@ def fetch_tmdb_movies_length():
     with open(path, "r", encoding="utf-8") as f:
         return sum(1 for _ in f)
 
-# Partitionize [parts] the number of line to process
+# partitions
 def partitions(total: int, parts: int):
     size = math.ceil(total / parts)
     out = []
@@ -98,11 +83,7 @@ def partitions(total: int, parts: int):
             out.append((start, end, i + 1))
     return out
 
-
-# ---------------------------
-# TMDB API calls (MOVIES)
-# ---------------------------
-
+# api
 def fetch_movie_details(movie_id: int):
     url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}"
     response = requests.get(url, headers=headers)
@@ -112,10 +93,8 @@ def fetch_movie_details(movie_id: int):
         return data
     else:
         print(f"Error fetching movie details for ID {movie_id}: {response.status_code}")
-        return None  # Handle error or return empty data
+        return None
 
-
-# FETCH ALL TITLES OF A MOVIE
 def fetch_all_titles(movie_id: int):
     url = f"https://api.themoviedb.org/3/movie/{movie_id}/alternative_titles?api_key={TMDB_API_KEY}"
     response = requests.get(url, headers=headers)
@@ -126,8 +105,7 @@ def fetch_all_titles(movie_id: int):
         return data
     else:
         print(f"Error fetching movie details for ID {movie_id}: {response.status_code}")
-        return None  # Handle error or return empty data
-    
+        return None
 
 def fetch_movies_from_mongodb():
     client = MongoClient(MONGO_URI)    
@@ -139,10 +117,7 @@ def fetch_movies_from_mongodb():
         movies_data.append(document)
     return movies_data
 
-
-# ---------------------------
-# DB info helpers
-# ---------------------------
+# helpers
 def fetch_last_known_movie_id():
     c = fetch_db_collection()
     last_movie = c.find_one(sort=[("id", -1)])
@@ -151,10 +126,7 @@ def fetch_last_known_movie_id():
     else:
         return None
 
-
-# ---------------------------
-# Download latest TMDB export for movies
-# ---------------------------
+# download
 def dl_recent_movie_ids():
     now = datetime.now()
 
@@ -219,8 +191,6 @@ def dl_recent_movie_ids():
             os.remove(files[0])
         print("File downloaded and extracted successfully.")
 
-
-# CHECK IF THE MOVIE ATTRIBUTES ARE THE SAME
 def check_movie_attributes(movie_details, db_movie_details):
     attributes_to_check = [
         "id",
@@ -247,15 +217,11 @@ def check_movie_attributes(movie_details, db_movie_details):
     for attr in attributes_to_check:
         if attr == "all_titles":
             continue
-        # Check if the attribute is different, False if it is
         if db_movie_details.get(attr) != movie_details.get(attr):
             return False
     return True
 
-
-# ---------------------------
-# Images
-# ---------------------------
+# images
 def fetch_movie_image(movie_id, path):
     url = f"https://image.tmdb.org/t/p/w500/{path}"
     response = requests.get(url, stream=True)
@@ -267,7 +233,6 @@ def fetch_movie_image(movie_id, path):
         return image_path
     else:
         return None
-
 
 def dl_movie_images():
     movies = fetch_db_movies()
@@ -282,10 +247,7 @@ def dl_movie_images():
             else:
                 print(f"Error downloading image for movie \"{m['original_title']}\" with id \"{m['id']}\"")
 
-
-# ---------------------------
-# Movies doc
-# ---------------------------
+# doc
 def movie_doc(l_m, details):
     return {
         "id": l_m["id"],
@@ -309,10 +271,7 @@ def movie_doc(l_m, details):
         "original_language": details["original_language"] if details.get("original_language") is not None else None,
     }
 
-
-# ---------------------------
-# THREADED compare file vs DB with UPSERT
-# ---------------------------
+# sync
 def sync_movies_file_add_db_threaded(parts: int = 4, only_new: bool = True):
     """Threaded compare+UPSERT for movies."""
 
@@ -392,7 +351,7 @@ def sync_movies_file_add_db_threaded(parts: int = 4, only_new: bool = True):
             print(f"[DONE] Part {p} ({s}-{e}) upserted {upserted} movies.")
 
     print(f"[DONE] Total movies upserted this run: {total_upserted}")
-    
-    if __name__ == "__main__":
-        # You may adjust parts and only_new as needed
-        sync_movies_file_add_db_threaded(parts=10, only_new=True)
+
+# main
+if __name__ == "__main__":
+    sync_movies_file_add_db_threaded(parts=10, only_new=True)

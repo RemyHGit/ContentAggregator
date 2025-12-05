@@ -8,9 +8,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
-# ---------------------------
-# Boot / env
-# ---------------------------
+# boot
 sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv()
 
@@ -30,23 +28,16 @@ headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY
 
 COLLECTION = "tmdb_series"
 
-# ---------------------------
-# Mongo helpers
-# ---------------------------
-
-
-# FETCH THE DATABASE COLLECTION
+# mongo
 def fetch_db_collection():
     mongo = MongoClient(MONGO_URI)
     collection = mongo[DB_NAME][COLLECTION]
     collection.create_index([("id", ASCENDING)], unique=True)
     return collection
 
-
 def fetch_db_series():
     c = fetch_db_collection()
     return c.find()
-
 
 def fetch_series_from_mongodb():
     """Kept for compatibility; used only for counts in logs if needed."""
@@ -55,10 +46,7 @@ def fetch_series_from_mongodb():
     collection = db[COLLECTION]
     return list(collection.find())
 
-
-# ---------------------------
-# Files: latest fN.json for series
-# ---------------------------
+# files
 def fetch_most_recent_file():
     if not os.path.exists("app/series_files"):
         os.makedirs("app/series_files")
@@ -72,9 +60,6 @@ def fetch_most_recent_file():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return files[-1]
 
-# ---------------------------
-# Files: most recent fN.json availble (locally)
-# ---------------------------
 def fetch_most_recent_file_name():
     if not os.path.exists("app/series_files"):
         os.makedirs("app/series_files")
@@ -89,7 +74,6 @@ def fetch_most_recent_file_name():
     files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
     return os.path.splitext(os.path.basename(files[-1]))[0]
 
-# File's lenght
 def fetch_tmdb_series_length():
     path = fetch_most_recent_file()
     if not path:
@@ -97,7 +81,7 @@ def fetch_tmdb_series_length():
     with open(path, "r", encoding="utf-8") as f:
         return sum(1 for _ in f)
 
-# Partitionize [parts] the number of line to process
+# partitions
 def partitions(total: int, parts: int):
     size = math.ceil(total / parts)
     out = []
@@ -105,13 +89,10 @@ def partitions(total: int, parts: int):
         start = i * size
         end = min(start + size, total)
         if start < end:
-            out.append((start, end, i + 1))  # (start, end, part_index)
+            out.append((start, end, i + 1))
     return out
 
-
-# ---------------------------
-# TMDB API calls (TV)
-# ---------------------------
+# api
 def fetch_serie_details(serie_id: int):
     url = f"https://api.themoviedb.org/3/tv/{serie_id}?api_key={TMDB_API_KEY}"
     response = requests.get(url, headers=headers)
@@ -124,7 +105,6 @@ def fetch_serie_details(serie_id: int):
         print(f"Error fetching serie details for ID {serie_id}: {response.status_code}")
         return None
 
-
 def fetch_all_titles(serie_id: int):
     url = f"https://api.themoviedb.org/3/tv/{serie_id}/alternative_titles?api_key={TMDB_API_KEY}"
     response = requests.get(url, headers=headers)
@@ -136,10 +116,7 @@ def fetch_all_titles(serie_id: int):
         )
         return None
 
-
-# ---------------------------
-# DB info helpers
-# ---------------------------
+# helpers
 def fetch_last_known_serie_id():
     c = fetch_db_collection()
     last_serie = c.find_one(sort=[("id", -1)])
@@ -148,10 +125,7 @@ def fetch_last_known_serie_id():
     else:
         return None
 
-
-# ---------------------------
-# Download latest TMDB export for series
-# ---------------------------
+# download
 def dl_recent_series_ids():
     now = datetime.now()
 
@@ -222,10 +196,7 @@ def dl_recent_series_ids():
             os.remove(files[0])
         print(f"File downloaded and extracted successfully to {out_path}.")
 
-
-# ---------------------------
-# Images
-# ---------------------------
+# images
 def fetch_serie_image(serie_id, path):
     url = f"https://image.tmdb.org/t/p/w500/{path}"
     response = requests.get(url, stream=True)
@@ -238,7 +209,6 @@ def fetch_serie_image(serie_id, path):
         return image_path
     else:
         return None
-
 
 def dl_serie_images():
     series = fetch_db_series()
@@ -256,10 +226,7 @@ def dl_serie_images():
                     f"Error downloading image for serie \"{s['original_name']}\" with id \"{s['id']}\""
                 )
 
-
-# ---------------------------
-# Series doc
-# ---------------------------
+# doc
 def serie_doc(l_s, details):
     return {
         "id": l_s["id"],
@@ -294,10 +261,7 @@ def serie_doc(l_s, details):
         "original_language": details.get("original_language"),
     }
 
-
-# ---------------------------
-# THREADED compare file vs DB with UPSERT
-# ---------------------------
+# sync
 def sync_series_file_add_db_threaded(parts: int = 4, only_new: bool = True):
     """Threaded compare+UPSERT for series.
 
@@ -348,7 +312,7 @@ def sync_series_file_add_db_threaded(parts: int = 4, only_new: bool = True):
             if not isinstance(sid, int):
                 continue
 
-            # 🔥 optional skip of old ids
+            # optional skip of old ids
             if only_new and last_id is not None and sid <= last_id:
                 continue
 
@@ -383,7 +347,7 @@ def sync_series_file_add_db_threaded(parts: int = 4, only_new: bool = True):
             print(f"[DONE] Part {p} ({s}-{e}) upserted {upserted} series.")
 
     print(f"[DONE] Total series upserted this run: {total_upserted}")
-    
-    if __name__ == "__main__":
-        # You may adjust parts and only_new as needed
-        sync_series_file_add_db_threaded(parts=10, only_new=True)
+
+# main
+if __name__ == "__main__":
+    sync_series_file_add_db_threaded(parts=10, only_new=True)
