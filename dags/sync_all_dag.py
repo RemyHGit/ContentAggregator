@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 import sys
 import os
 
-# Ajouter le chemin des plugins pour les imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'plugins'))
 
 from games_mongodb_script import sync_all_games_threaded
 from movies_mongodb_script import sync_movies_file_add_db_threaded
 from series_mongodb_script import sync_series_file_add_db_threaded
+from music_mongodb_script import sync_music_threaded
 
 default_args = {
     'owner': 'airflow',
@@ -23,7 +23,7 @@ default_args = {
 dag = DAG(
     'sync_all_sources',
     default_args=default_args,
-    description='Synchronise tous les contenus (jeux, films, séries) vers MongoDB',
+    description='Sync all contents (games, movies, series, music) to a dockerized MongoDB',
     schedule_interval=timedelta(days=1),  # Exécution quotidienne
     start_date=datetime(2025, 1, 1),
     catchup=False,
@@ -31,18 +31,22 @@ dag = DAG(
 )
 
 def sync_games_task(**context):
-    """Tâche pour synchroniser les jeux IGDB"""
+    """Task to sync games from IGDB"""
     sync_all_games_threaded(parts=4)
 
 def sync_movies_task(**context):
-    """Tâche pour synchroniser les films TMDB"""
+    """Task to sync movies from TMDB"""
     sync_movies_file_add_db_threaded(parts=10, only_new=True)
 
 def sync_series_task(**context):
-    """Tâche pour synchroniser les séries TMDB"""
+    """Task to sync series from TMDB"""
     sync_series_file_add_db_threaded(parts=10, only_new=True)
 
-# Création des tâches
+def sync_music_task(**context):
+    """Task to sync music from MusicBrainz"""
+    sync_music_threaded(dump_date="LATEST", parts=4)
+
+# tasks
 sync_games = PythonOperator(
     task_id='sync_igdb_games',
     python_callable=sync_games_task,
@@ -61,7 +65,8 @@ sync_series = PythonOperator(
     dag=dag,
 )
 
-# Les tâches s'exécutent en parallèle (pas de dépendances)
-# Si tu veux qu'elles s'exécutent séquentiellement, décommente les lignes suivantes:
-# sync_games >> sync_movies >> sync_series
-
+sync_music = PythonOperator(
+    task_id='sync_musicbrainz_music',
+    python_callable=sync_music_task,
+    dag=dag,
+)
