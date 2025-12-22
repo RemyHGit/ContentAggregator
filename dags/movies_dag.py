@@ -20,14 +20,14 @@ default_args = {
 dag = DAG(
     'sync_tmdb_movies',
     default_args=default_args,
-    description='Synch movies from TMDB to a local MongoDB',
+    description='Synch movies from TMDB to a dockerized MongoDB',
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['tmdb', 'movies', 'mongodb'],
 )
 
 def sync_movies_task(**context):
-    """Tâche pour synchroniser les films TMDB"""
+    """task to sync movies from TMDB to a dockerized MongoDB"""
     sync_movies_file_add_db_threaded(parts=10, only_new=True)
 
 sync_movies = PythonOperator(

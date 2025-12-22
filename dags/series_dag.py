@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import sys
 import os
 
-# Ajouter le chemin des plugins pour les imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'plugins'))
 
 from series_mongodb_script import sync_series_file_add_db_threaded
@@ -21,14 +20,14 @@ default_args = {
 dag = DAG(
     'sync_tmdb_series',
     default_args=default_args,
-    description='Synchronise les séries depuis TMDB vers MongoDB',
+    description='Sync series from TMDB to a dockerized MongoDB',
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['tmdb', 'series', 'mongodb'],
 )
 
 def sync_series_task(**context):
-    """Tâche pour synchroniser les séries TMDB"""
+    """task to sync series from TMDB"""
     sync_series_file_add_db_threaded(parts=10, only_new=True)
 
 sync_series = PythonOperator(

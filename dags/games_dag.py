@@ -20,7 +20,7 @@ default_args = {
 dag = DAG(
     'sync_igdb_games',
     default_args=default_args,
-    description='Synch games from IGDB to a local MongoDB',
+    description='Synch games from IGDB to a dockerized MongoDB',
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['igdb', 'games', 'mongodb'],
