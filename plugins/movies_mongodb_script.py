@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import threading
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # boot
 sys.stdout.reconfigure(encoding="utf-8")
@@ -28,6 +31,25 @@ if not DB_NAME:
 COLLECTION = "tmdb_movies"
 
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
+
+# Rate limiting: TMDB allows ~40 requests/second, we'll be conservative with 30 req/s
+# This means minimum 1/30 = 0.033 seconds between requests
+RATE_LIMIT_DELAY = 1.0 / 30.0  # ~33ms between requests
+rate_limit_lock = threading.Lock()
+last_request_time = 0.0
+
+# Create a session with retry strategy for SSL errors and rate limits
+session = requests.Session()
+retry_strategy = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+    respect_retry_after_header=True
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
 
 # mongo
 def fetch_db_collection():
@@ -91,29 +113,96 @@ def partitions(total: int, parts: int):
     return out
 
 # api
+def rate_limited_request(url: str, max_retries: int = 5):
+    """
+    Makes a rate-limited HTTP request with retry logic for SSL errors and rate limits.
+    Respects TMDB's rate limit of ~40 requests/second by enforcing a minimum delay.
+    """
+    global last_request_time
+    
+    for attempt in range(max_retries):
+        try:
+            # Rate limiting: ensure minimum delay between requests across all threads
+            with rate_limit_lock:
+                current_time = time.time()
+                time_since_last = current_time - last_request_time
+                if time_since_last < RATE_LIMIT_DELAY:
+                    sleep_time = RATE_LIMIT_DELAY - time_since_last
+                    time.sleep(sleep_time)
+                last_request_time = time.time()
+            
+            # Make the request with retry strategy
+            response = session.get(url, headers=headers, timeout=30)
+            
+            # Handle rate limit (429) - wait longer if we hit it
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', 10))
+                print(f"Rate limit hit (429), waiting {retry_after} seconds...")
+                time.sleep(retry_after)
+                continue
+            
+            # Handle other errors
+            if response.status_code != 200:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    print(f"Request failed with status {response.status_code}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Error fetching URL after {max_retries} attempts: {response.status_code}")
+                    return None
+            
+            return response
+            
+        except requests.exceptions.SSLError as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff for SSL errors
+                print(f"SSL error occurred, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"SSL error after {max_retries} attempts: {e}")
+                return None
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"Request exception occurred, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"Request exception after {max_retries} attempts: {e}")
+                return None
+    
+    return None
+
 def fetch_movie_details(movie_id: int):
     """Fetches complete movie details from TMDB API by movie ID"""
     url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}"
-    response = requests.get(url, headers=headers)
-    data = response.json()
-
-    if response.status_code == 200:
+    response = rate_limited_request(url)
+    
+    if response is None:
+        return None
+    
+    try:
+        data = response.json()
         return data
-    else:
-        print(f"Error fetching movie details for ID {movie_id}: {response.status_code}")
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON for movie ID {movie_id}: {e}")
         return None
 
 def fetch_all_titles(movie_id: int):
     """Fetches all alternative titles for a movie from TMDB API"""
     url = f"https://api.themoviedb.org/3/movie/{movie_id}/alternative_titles?api_key={TMDB_API_KEY}"
-    response = requests.get(url, headers=headers)
-
-    # Check for response status code
-    if response.status_code == 200:
+    response = rate_limited_request(url)
+    
+    if response is None:
+        return None
+    
+    try:
         data = response.json()
         return data
-    else:
-        print(f"Error fetching movie details for ID {movie_id}: {response.status_code}")
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON for alternative titles of movie ID {movie_id}: {e}")
         return None
 
 def fetch_movies_from_mongodb():
@@ -261,15 +350,30 @@ def check_movie_attributes(movie_details, db_movie_details):
 def fetch_movie_image(movie_id, path):
     """Downloads a movie poster image from TMDB and saves it locally"""
     url = f"https://image.tmdb.org/t/p/w500/{path}"
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        os.makedirs("images/movies", exist_ok=True)
-        image_path = os.path.join("images/movies", f"{movie_id}.jpg")
-        with open(image_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=128):
-                f.write(chunk)
-        return image_path
-    else:
+    
+    # Apply rate limiting
+    global last_request_time
+    with rate_limit_lock:
+        current_time = time.time()
+        time_since_last = current_time - last_request_time
+        if time_since_last < RATE_LIMIT_DELAY:
+            sleep_time = RATE_LIMIT_DELAY - time_since_last
+            time.sleep(sleep_time)
+        last_request_time = time.time()
+    
+    try:
+        response = session.get(url, stream=True, timeout=30)
+        if response.status_code == 200:
+            os.makedirs("images/movies", exist_ok=True)
+            image_path = os.path.join("images/movies", f"{movie_id}.jpg")
+            with open(image_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=128):
+                    f.write(chunk)
+            return image_path
+        else:
+            return None
+    except (requests.exceptions.SSLError, requests.exceptions.RequestException) as e:
+        print(f"Error downloading image for movie {movie_id}: {e}")
         return None
 
 def dl_movie_images():
