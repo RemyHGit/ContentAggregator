@@ -23,11 +23,12 @@ dag = DAG(
     description='Synch games from IGDB to a dockerized MongoDB',
     start_date=datetime(2025, 1, 1),
     catchup=False,
-    tags=['igdb', 'games', 'mongodb'],
+    tags=['igdb', 'games', 'mongodb'], 
+    schedule_interval=timedelta(days=1),
 )
 
 def sync_games_task(**context):
-    sync_all_games_threaded(parts=4)
+    sync_all_games_threaded(parts=4, only_new=True)
 
 sync_games = PythonOperator(
     task_id='sync_igdb_games',

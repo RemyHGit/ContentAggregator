@@ -1,4 +1,4 @@
-import os, sys, json, gzip, lzma, math, requests, tarfile, re
+import os, sys, json, gzip, lzma, math, requests, tarfile, re, shutil
 from pathlib import Path
 from pymongo import MongoClient, UpdateOne, ASCENDING
 from datetime import datetime
@@ -20,7 +20,8 @@ if not DB_NAME:
     raise RuntimeError("DB_NAME is not set in your .env")
 
 COLLECTION = "musicbrainz_music"
-DATA_DIR = Path("app/musicbrainz")
+APP_DIR = "/opt/airflow/app"
+DATA_DIR = Path(f"{APP_DIR}/musicbrainz")
 DATA_DIR.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
 DUMP_BASE_URL = "https://data.metabrainz.org/pub/musicbrainz/data/json-dumps"
@@ -111,6 +112,45 @@ def extract_tar_xz(tar_path: Path, extract_to: Path = None):
         print(f"[ERROR] Failed to extract {tar_path.name}: {e}")
         raise
 
+def cleanup_old_musicbrainz_dumps(keep_latest: int = 1):
+    """Delete old MusicBrainz dump directories, keeping only the N most recent ones"""
+    if not DATA_DIR.exists():
+        return
+    
+    # Get all dump directories (excluding 'summary' and other non-dump dirs)
+    dump_dirs = [d for d in DATA_DIR.iterdir() if d.is_dir() and d.name != "summary"]
+    
+    if len(dump_dirs) <= keep_latest:
+        print(f"[CLEANUP] Only {len(dump_dirs)} dump(s) found, keeping all (limit: {keep_latest})")
+        return
+    
+    # Sort by name (which contains date) in descending order
+    dump_dirs.sort(key=lambda x: x.name, reverse=True)
+    
+    # Keep the N most recent, delete the rest
+    dirs_to_delete = dump_dirs[keep_latest:]
+    
+    if not dirs_to_delete:
+        return
+    
+    print(f"[CLEANUP] Found {len(dump_dirs)} dump(s), keeping {keep_latest} most recent, deleting {len(dirs_to_delete)} old dump(s)...")
+    
+    total_size_freed = 0
+    for dump_dir in dirs_to_delete:
+        try:
+            # Calculate size before deletion
+            dir_size = sum(f.stat().st_size for f in dump_dir.rglob('*') if f.is_file())
+            total_size_freed += dir_size
+            
+            # Delete the entire directory
+            shutil.rmtree(dump_dir)
+            print(f"[CLEANUP] Deleted old dump: {dump_dir.name} ({dir_size / (1024**3):.2f} GB)")
+        except Exception as e:
+            print(f"[CLEANUP] Error deleting {dump_dir.name}: {e}")
+    
+    if total_size_freed > 0:
+        print(f"[CLEANUP] Total space freed: {total_size_freed / (1024**3):.2f} GB")
+
 def download_and_extract_dump(dump_date: str = None):
     """Download and extract release-group dump from MusicBrainz"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -158,6 +198,10 @@ def download_and_extract_dump(dump_date: str = None):
                 print(f"[INFO] Extraction complete. File is at {release_group_file}")
             else:
                 print(f"[INFO] Extraction complete. Check {dump_dir / 'mbdump' / 'release-group'}")
+            
+            # Cleanup old dumps after successful extraction
+            cleanup_old_musicbrainz_dumps(keep_latest=1)
+            
             return dump_date
         except Exception as e:
             print(f"[ERROR] Failed to extract dump: {e}")
@@ -296,7 +340,7 @@ def process_release_group_line(line: str, line_num: int, part: int, fetch_cover_
         print(f"[Part {part}] [WARNING] Error processing line {line_num}: {e}")
         return None, None, 0, 1
 
-def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag: bool = True):
+def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag: bool = True, only_new: bool = True):
     """Worker thread that processes lines from the queue"""
     c = fetch_db_collection()
     
@@ -315,6 +359,18 @@ def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag:
         line_count += 1
         
         ops, doc, proc, skip = process_release_group_line(line, line_num, part, fetch_cover_art_flag)
+        
+        # Skip if release-group already exists for any artist (when only_new=True)
+        if only_new and ops and doc:
+            mbid = doc.get("mbid")
+            if mbid:
+                # Check if any artist already has this release-group
+                existing = c.find_one({
+                    "release_groups.mbid": mbid
+                })
+                if existing:
+                    skipped += 1
+                    ops = None  # Skip this operation
         
         if ops:
             operations.extend(ops)
@@ -338,9 +394,10 @@ def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag:
     print(f"[Part {part}] Completed file {file_name}: {processed} processed, {filtered_count} filtered (Album/EP/Single), {skipped} skipped")
     return processed, filtered_count, skipped
 
-def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover_art_flag: bool = True):
+def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover_art_flag: bool = True, only_new: bool = True):
     """Process a release-group file using multiple threads that read from a shared queue"""
     print(f"[INFO] Processing file: {json_file.name} with {parts} threads")
+    print(f"[INFO] Only new release-groups: {only_new}")
     
     # Determine file type and open accordingly
     try:
@@ -370,7 +427,7 @@ def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover
     # Start worker threads
     for part in range(1, parts + 1):
         thread = threading.Thread(
-            target=lambda p=part: results.update({p: worker_thread(queue, p, json_file.name, fetch_cover_art_flag)}),
+            target=lambda p=part: results.update({p: worker_thread(queue, p, json_file.name, fetch_cover_art_flag, only_new)}),
             daemon=False
         )
         thread.start()
@@ -397,7 +454,7 @@ def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover
     total_skipped = sum(result[2] for result in results.values())
     return total_processed, total_filtered, total_skipped
 
-def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bool = True, fetch_cover_art: bool = True):
+def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bool = True, fetch_cover_art: bool = True, only_new: bool = True):
     """Threaded synchronization: reads release-groups from dump files, filters to Album/EP/Single, and updates MongoDB"""
     # Ensure DATA_DIR exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -469,13 +526,14 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
             if mbdump_dir.exists():
                 files_in_dir = list(mbdump_dir.iterdir())
                 print(f"[DEBUG] Files/dirs in mbdump directory: {[f.name for f in files_in_dir]}")
-            print("[INFO] Make sure the dump has been extracted. Check: app/musicbrainz/{dump_date}/mbdump/release-group")
+            print(f"[INFO] Make sure the dump has been extracted. Check: {APP_DIR}/musicbrainz/{dump_date}/mbdump/release-group")
             return
     
     print(f"[INFO] Found {len(release_group_files)} release-group file(s)")
     print(f"[INFO] Using {parts} threads per file")
     print(f"[INFO] Filtering for: {', '.join(ALLOWED_TYPES)}")
     print(f"[INFO] Fetch cover art: {fetch_cover_art}")
+    print(f"[INFO] Only new release-groups: {only_new}")
     
     c = fetch_db_collection()
     db_len_before = c.count_documents({})
@@ -487,7 +545,7 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
     total_skipped = 0
     
     for json_file in release_group_files:
-        processed, filtered, skipped = process_release_group_file_threaded(json_file, parts, fetch_cover_art)
+        processed, filtered, skipped = process_release_group_file_threaded(json_file, parts, fetch_cover_art, only_new)
         total_processed += processed
         total_filtered += filtered
         total_skipped += skipped
@@ -500,4 +558,4 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
 
 # main
 if __name__ == "__main__":
-    sync_music_threaded(dump_date="LATEST", parts=4, auto_download=True, fetch_cover_art=True)
+    sync_music_threaded(dump_date="LATEST", parts=4, auto_download=True, fetch_cover_art=True, only_new=True)

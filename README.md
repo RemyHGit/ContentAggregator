@@ -13,6 +13,10 @@ For games, we're using the IGDB API which requires Twitch credentials. The scrip
 ### Music
 For music, we're using the MusicBrainz API (free, no API key needed, but requires User-Agent header). The script searches artists by various queries, fetches their releases (albums), and stores all information in MongoDB. The API has a rate limit of 1 request per second which is automatically handled.
 
+### Openlibrary
+For books, we're using the **Open Library** data dumps. The script downloads the editions dump, processes book records, and stores them in MongoDB. By default it only fetches new records that have not already been synced, and downloading/parsing is automated. Book syncing is threaded for speed, and book covers can also be fetched if configured.
+
+
 ### Automation with Airflow
 The project is now automated using **Apache Airflow**. Each content type (movies, series, games, music) has its own DAG that runs daily to sync data from the APIs to MongoDB. There's also a `sync_all_sources` DAG that runs all syncs in parallel.
 
@@ -29,10 +33,11 @@ Then, run `plugins/main.py` and it should works. This will sync all sources (mov
 ### With Airflow (Docker)
 The project includes a `docker-compose.yml` file to run Airflow. Just run:
 ```bash
-docker-compose build
-
-docker-compose up -d
+docker-compose up --build -d
 ```
+
+It will build and create a docker container, containing what's needed for running the file !
+
 
 Then access the Airflow UI at `http://localhost:8080` (default credentials: admin/admin).
 
@@ -41,6 +46,7 @@ The DAGs available are:
 - `sync_tmdb_series` - Sync series from TMDB  
 - `sync_igdb_games` - Sync games from IGDB
 - `sync_brainz_music` - Sync music artists from MusicBrainz
+- `sync_openlibrary_books` - Sync books from Openlibrary
 - `sync_all_sources` - Sync all sources in parallel
 
 ## Environment variables
