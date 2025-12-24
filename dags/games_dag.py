@@ -27,7 +27,7 @@ dag = DAG(
 )
 
 def sync_games_task(**context):
-    sync_all_games_threaded(parts=4)
+    sync_all_games_threaded(parts=4, only_new=True)
 
 sync_games = PythonOperator(
     task_id='sync_igdb_games',

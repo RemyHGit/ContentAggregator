@@ -296,7 +296,7 @@ def process_release_group_line(line: str, line_num: int, part: int, fetch_cover_
         print(f"[Part {part}] [WARNING] Error processing line {line_num}: {e}")
         return None, None, 0, 1
 
-def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag: bool = True):
+def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag: bool = True, only_new: bool = True):
     """Worker thread that processes lines from the queue"""
     c = fetch_db_collection()
     
@@ -315,6 +315,18 @@ def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag:
         line_count += 1
         
         ops, doc, proc, skip = process_release_group_line(line, line_num, part, fetch_cover_art_flag)
+        
+        # Skip if release-group already exists for any artist (when only_new=True)
+        if only_new and ops and doc:
+            mbid = doc.get("mbid")
+            if mbid:
+                # Check if any artist already has this release-group
+                existing = c.find_one({
+                    "release_groups.mbid": mbid
+                })
+                if existing:
+                    skipped += 1
+                    ops = None  # Skip this operation
         
         if ops:
             operations.extend(ops)
@@ -338,9 +350,10 @@ def worker_thread(queue: Queue, part: int, file_name: str, fetch_cover_art_flag:
     print(f"[Part {part}] Completed file {file_name}: {processed} processed, {filtered_count} filtered (Album/EP/Single), {skipped} skipped")
     return processed, filtered_count, skipped
 
-def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover_art_flag: bool = True):
+def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover_art_flag: bool = True, only_new: bool = True):
     """Process a release-group file using multiple threads that read from a shared queue"""
     print(f"[INFO] Processing file: {json_file.name} with {parts} threads")
+    print(f"[INFO] Only new release-groups: {only_new}")
     
     # Determine file type and open accordingly
     try:
@@ -370,7 +383,7 @@ def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover
     # Start worker threads
     for part in range(1, parts + 1):
         thread = threading.Thread(
-            target=lambda p=part: results.update({p: worker_thread(queue, p, json_file.name, fetch_cover_art_flag)}),
+            target=lambda p=part: results.update({p: worker_thread(queue, p, json_file.name, fetch_cover_art_flag, only_new)}),
             daemon=False
         )
         thread.start()
@@ -397,7 +410,7 @@ def process_release_group_file_threaded(json_file: Path, parts: int, fetch_cover
     total_skipped = sum(result[2] for result in results.values())
     return total_processed, total_filtered, total_skipped
 
-def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bool = True, fetch_cover_art: bool = True):
+def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bool = True, fetch_cover_art: bool = True, only_new: bool = True):
     """Threaded synchronization: reads release-groups from dump files, filters to Album/EP/Single, and updates MongoDB"""
     # Ensure DATA_DIR exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -476,6 +489,7 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
     print(f"[INFO] Using {parts} threads per file")
     print(f"[INFO] Filtering for: {', '.join(ALLOWED_TYPES)}")
     print(f"[INFO] Fetch cover art: {fetch_cover_art}")
+    print(f"[INFO] Only new release-groups: {only_new}")
     
     c = fetch_db_collection()
     db_len_before = c.count_documents({})
@@ -487,7 +501,7 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
     total_skipped = 0
     
     for json_file in release_group_files:
-        processed, filtered, skipped = process_release_group_file_threaded(json_file, parts, fetch_cover_art)
+        processed, filtered, skipped = process_release_group_file_threaded(json_file, parts, fetch_cover_art, only_new)
         total_processed += processed
         total_filtered += filtered
         total_skipped += skipped
@@ -500,4 +514,4 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
 
 # main
 if __name__ == "__main__":
-    sync_music_threaded(dump_date="LATEST", parts=4, auto_download=True, fetch_cover_art=True)
+    sync_music_threaded(dump_date="LATEST", parts=4, auto_download=True, fetch_cover_art=True, only_new=True)

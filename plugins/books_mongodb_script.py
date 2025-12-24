@@ -162,24 +162,51 @@ def download_dump(dump_type: str = "editions", auto_download: bool = True, force
         print(f"[ERROR] Failed to download dump: {e}")
         return None
 
-def process_edition_line(line: str, line_num: int, part: int):
+def process_edition_line(line: str, line_num: int, part: int, debug: bool = False):
     """Process a single line from Open Library editions dump"""
+    # Skip empty lines and comments (don't count as skipped)
+    stripped_line = line.strip()
+    if not stripped_line or stripped_line.startswith('#'):
+        return None, None, 0, 0  # Not an error, just skip silently
+    
     try:
-        # Open Library dump format: type\ttimestamp\tkey\trevision\tlast_modified\tJSON
-        parts = line.strip().split('\t', 5)
-        if len(parts) < 6:
+        # Open Library dump format: type\tkey\trevision\tlast_modified\tJSON
+        # Note: Some dumps may have timestamp, but current format has 5 parts
+        parts = stripped_line.split('\t', 4)
+        
+        # Debug logging for first few failures
+        if len(parts) < 5:
+            if debug and line_num < 10:
+                print(f"[Part {part}] [DEBUG] Line {line_num} has {len(parts)} parts (expected 5). First 100 chars: {stripped_line[:100]}")
             return None, None, 0, 1  # operations, book_doc, processed, skipped
         
-        dump_type, timestamp, key, revision, last_modified, json_data = parts
+        # Handle both 5-part format (current) and 6-part format (with timestamp)
+        if len(parts) == 5:
+            dump_type, key, revision, last_modified, json_data = parts
+            timestamp = None  # No timestamp in current format
+        else:
+            # Legacy 6-part format with timestamp
+            dump_type, timestamp, key, revision, last_modified, json_data = parts
+        
+        # Skip if key is empty or invalid
+        if not key or not key.startswith('/books/'):
+            if debug and line_num < 10:
+                print(f"[Part {part}] [DEBUG] Line {line_num} has invalid key: {key}")
+            return None, None, 0, 1
         
         # Parse JSON data
-        book_data = json.loads(json_data)
+        try:
+            book_data = json.loads(json_data)
+        except json.JSONDecodeError as e:
+            if debug and line_num < 10:
+                print(f"[Part {part}] [DEBUG] Line {line_num} JSON decode error: {e}. JSON preview: {json_data[:200]}")
+            raise
         
         # Extract useful fields
         book_doc = {
             "key": key,
             "type": dump_type,
-            "revision": int(revision) if revision.isdigit() else None,
+            "revision": int(revision) if revision and revision.isdigit() else None,
             "last_modified": last_modified,
             "title": book_data.get("title"),
             "subtitle": book_data.get("subtitle"),
@@ -215,19 +242,24 @@ def process_edition_line(line: str, line_num: int, part: int):
         return [operation], book_doc, 1, 0
         
     except json.JSONDecodeError as e:
-        print(f"[Part {part}] [WARNING] Failed to parse JSON at line {line_num}: {e}")
+        # Only log first few errors to avoid spam
+        if line_num < 10:
+            print(f"[Part {part}] [WARNING] Failed to parse JSON at line {line_num}: {e}")
         return None, None, 0, 1
     except Exception as e:
-        print(f"[Part {part}] [WARNING] Error processing line {line_num}: {e}")
+        # Only log first few errors to avoid spam
+        if line_num < 10:
+            print(f"[Part {part}] [WARNING] Error processing line {line_num}: {e}")
         return None, None, 0, 1
 
-def worker_thread(queue: Queue, part: int, file_name: str):
+def worker_thread(queue: Queue, part: int, file_name: str, only_new: bool = True):
     """Worker thread that processes lines from the queue"""
     c = fetch_db_collection()
     
     operations = []
     processed = 0
     skipped = 0
+    first_line = True
     
     while True:
         item = queue.get()
@@ -236,7 +268,20 @@ def worker_thread(queue: Queue, part: int, file_name: str):
         
         line_num, line = item
         
-        ops, doc, proc, skip = process_edition_line(line, line_num, part)
+        # Enable debug for first few lines of each thread
+        debug = first_line and line_num < 10
+        ops, doc, proc, skip = process_edition_line(line, line_num, part, debug=debug)
+        
+        # Skip if document already exists in DB (when only_new=True)
+        if only_new and ops and doc:
+            existing = c.find_one({"key": doc.get("key")})
+            if existing:
+                skipped += 1
+                ops = None  # Skip this operation
+        
+        if first_line and ops:
+            print(f"[Part {part}] Successfully processed first book at line {line_num}: key={doc.get('key') if doc else 'N/A'}")
+            first_line = False
         
         if ops:
             operations.extend(ops)
@@ -246,22 +291,51 @@ def worker_thread(queue: Queue, part: int, file_name: str):
         
         # Bulk write every 1000 operations
         if len(operations) >= 1000:
-            c.bulk_write(operations, ordered=False)
-            print(f"[Part {part}] Processed {processed} books (line {line_num}, batch: {len(operations)})")
+            try:
+                c.bulk_write(operations, ordered=False)
+                print(f"[Part {part}] Processed {processed} books (line {line_num}, batch: {len(operations)})")
+            except Exception as e:
+                print(f"[Part {part}] [ERROR] Bulk write failed at line {line_num}: {e}")
+                # Try to write operations one by one to identify problematic documents
+                for op in operations:
+                    try:
+                        c.bulk_write([op], ordered=False)
+                    except Exception as op_err:
+                        print(f"[Part {part}] [ERROR] Failed to write operation: {op_err}")
             operations = []
         
         queue.task_done()
     
     # Insert remaining batch
     if operations:
-        c.bulk_write(operations, ordered=False)
+        try:
+            c.bulk_write(operations, ordered=False)
+        except Exception as e:
+            print(f"[Part {part}] [ERROR] Final bulk write failed: {e}")
     
     print(f"[Part {part}] Completed file {file_name}: {processed} processed, {skipped} skipped")
     return processed, skipped
 
-def process_dump_file_threaded(dump_file: Path, parts: int = 4):
+def process_dump_file_threaded(dump_file: Path, parts: int = 4, only_new: bool = True):
     """Process an Open Library dump file using multiple threads"""
     print(f"[INFO] Processing file: {dump_file.name} with {parts} threads")
+    print(f"[INFO] Only new books: {only_new}")
+    
+    # Diagnostic: Read and analyze first few lines to understand format
+    print(f"[INFO] Analyzing file format...")
+    sample_lines = []
+    try:
+        with gzip.open(dump_file, 'rt', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if i >= 5:  # Read first 5 non-empty lines
+                    break
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    sample_lines.append((i, stripped))
+                    parts_count = len(stripped.split('\t', 4))
+                    print(f"[INFO] Sample line {i}: {parts_count} parts, first 150 chars: {stripped[:150]}")
+    except Exception as e:
+        print(f"[WARNING] Could not analyze file format: {e}")
     
     # Create queue and worker threads
     queue = Queue(maxsize=parts * 1000)
@@ -272,7 +346,7 @@ def process_dump_file_threaded(dump_file: Path, parts: int = 4):
     # Start worker threads
     for part in range(1, parts + 1):
         thread = threading.Thread(
-            target=lambda p=part: results.update({p: worker_thread(queue, p, dump_file.name)}),
+            target=lambda p=part: results.update({p: worker_thread(queue, p, dump_file.name, only_new)}),
             daemon=False
         )
         thread.start()
@@ -285,6 +359,9 @@ def process_dump_file_threaded(dump_file: Path, parts: int = 4):
             for line_num, line in enumerate(f):
                 queue.put((line_num, line))
                 line_count += 1
+                # Progress indicator every 1M lines
+                if line_count % 1000000 == 0:
+                    print(f"[INFO] Read {line_count:,} lines so far...")
     except (EOFError, OSError, BadGzipFile) as e:
         print(f"[ERROR] Failed to read gzip file: {e}")
         print(f"[ERROR] File may be corrupted or incomplete. Please delete and re-download.")
@@ -295,6 +372,8 @@ def process_dump_file_threaded(dump_file: Path, parts: int = 4):
         for thread in threads:
             thread.join()
         raise ValueError(f"Corrupted gzip file: {e}")
+    
+    print(f"[INFO] Finished reading {line_count:,} total lines")
     
     # Send sentinel values to stop workers
     for _ in range(parts):
@@ -309,7 +388,7 @@ def process_dump_file_threaded(dump_file: Path, parts: int = 4):
     total_skipped = sum(result[1] for result in results.values())
     return total_processed, total_skipped
 
-def sync_books_threaded(dump_type: str = "editions", parts: int = 4, auto_download: bool = True):
+def sync_books_threaded(dump_type: str = "editions", parts: int = 4, auto_download: bool = True, only_new: bool = True):
     """Threaded synchronization: reads books from Open Library dump and updates MongoDB"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -323,13 +402,14 @@ def sync_books_threaded(dump_type: str = "editions", parts: int = 4, auto_downlo
     
     print(f"[INFO] Using dump file: {dump_file}")
     print(f"[INFO] Using {parts} threads")
+    print(f"[INFO] Only new books: {only_new}")
     
     c = fetch_db_collection()
     db_len_before = c.count_documents({})
     print(f"[INFO] Number of books in database before sync: {db_len_before}")
     
     # Process dump file with threading
-    total_processed, total_skipped = process_dump_file_threaded(dump_file, parts)
+    total_processed, total_skipped = process_dump_file_threaded(dump_file, parts, only_new)
     
     db_len_after = c.count_documents({})
     print(f"[DONE] Total processed: {total_processed} books")
@@ -338,5 +418,5 @@ def sync_books_threaded(dump_type: str = "editions", parts: int = 4, auto_downlo
 
 # main
 if __name__ == "__main__":
-    sync_books_threaded(dump_type="editions", parts=4, auto_download=True)
+    sync_books_threaded(dump_type="editions", parts=4, auto_download=True, only_new=True)
 

@@ -122,7 +122,7 @@ def upsert_batch(docs: list[dict]) -> None:
         res = col.bulk_write(ops, ordered=False)
         print(f"  ↳ upserted={getattr(res, 'upserted_count', 0)} modified={getattr(res, 'modified_count', 0)}")
 
-def process_range(start: int, end: int, part: int) -> int:
+def process_range(start: int, end: int, part: int, only_new: bool = True) -> int:
     """Processes a range of game IDs, fetching and upserting them in batches"""
     fetched = 0
     offset = start
@@ -151,8 +151,18 @@ def process_range(start: int, end: int, part: int) -> int:
             continue
         
         empty_batches = 0  # Reset counter on successful fetch
-        upsert_batch(batch)
-        fetched += len(batch)
+        
+        # Filter out games that already exist if only_new=True
+        if only_new:
+            batch_ids = [g.get("id") for g in batch if g.get("id")]
+            if batch_ids:
+                existing_ids = set(col.find({"id": {"$in": batch_ids}}, {"id": 1}).distinct("id"))
+                batch = [g for g in batch if g.get("id") not in existing_ids]
+        
+        if batch:  # Only upsert if there are new games
+            upsert_batch(batch)
+            fetched += len(batch)
+        
         offset += BATCH_SIZE
         print(f"Games Part {part} (Thread {start}-{end}) progress: {fetched} (last offset {offset})")
         
@@ -172,7 +182,7 @@ def partitions(total: int, parts: int):
             out.append((start, end, i + 1))
     return out
 
-def sync_all_games_threaded(parts: int = 4, max_workers: int | None = None):
+def sync_all_games_threaded(parts: int = 4, max_workers: int | None = None, only_new: bool = True):
     """Threaded synchronization of all games from IGDB API to MongoDB"""
     total = count_igdb_games()
     print(f"[INFO] API count: {total}")
@@ -183,13 +193,14 @@ def sync_all_games_threaded(parts: int = 4, max_workers: int | None = None):
     # Check current database count
     db_count = col.count_documents({})
     print(f"[INFO] Current games in database: {db_count}")
+    print(f"[INFO] Only new games: {only_new}")
 
     ranges = partitions(total, parts)
     print(f"[INFO] Using {len(ranges)} partitions of ~{math.ceil(total/len(ranges))} rows each")
 
     fetched_total = 0
     with ThreadPoolExecutor(max_workers=max_workers or parts, thread_name_prefix="games") as pool:
-        futures = {pool.submit(process_range, s, e, p): (s, e, p) for (s, e, p) in ranges}
+        futures = {pool.submit(process_range, s, e, p, only_new): (s, e, p) for (s, e, p) in ranges}
         for fut in as_completed(futures):
             (s, e, p) = futures[fut]
             got = fut.result()
@@ -210,4 +221,4 @@ def sync_all_games_threaded(parts: int = 4, max_workers: int | None = None):
 
 # main
 if __name__ == "__main__":
-    sync_all_games_threaded()
+    sync_all_games_threaded(only_new=True)

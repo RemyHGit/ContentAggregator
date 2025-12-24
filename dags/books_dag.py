@@ -29,7 +29,7 @@ dag = DAG(
 
 def sync_books_task(**context):
     """task to sync books from Open Library to a dockerized MongoDB"""
-    sync_books_threaded(dump_type="editions", parts=4, auto_download=True)
+    sync_books_threaded(dump_type="editions", parts=4, auto_download=True, only_new=True)
 
 sync_books = PythonOperator(
     task_id='sync_openlibrary_books',

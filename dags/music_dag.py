@@ -29,7 +29,7 @@ dag = DAG(
 def sync_music_task(**context):
     """task to sync musics from MusicBrainz to a dockerized MongoDB"""
     # read release-groups from dumps, filter for Album/EP/Single only, and update MongoDB with threading
-    sync_music_threaded(dump_date="LATEST", parts=4)
+    sync_music_threaded(dump_date="LATEST", parts=4, only_new=True)
 
 sync_music = PythonOperator(
     task_id='sync_musicbrainz_music',
