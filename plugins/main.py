@@ -3,7 +3,8 @@ import threading
 from movies_mongodb_script import sync_movies_file_add_db_threaded as tmdb_upsert_movies
 from series_mongodb_script import sync_series_file_add_db_threaded as tmdb_upsert_series
 from games_mongodb_script  import sync_all_games_threaded          as igdb_upsert_games
-from music_mongodb_script   import sync_music_threaded              as musicbrainz_upsert_music
+from music_mongodb_script  import sync_music_threaded              as musicbrainz_upsert_music
+from books_mongodb_script  import sync_books_threaded              as openlibrary_upsert_books
 
 
 if __name__ == "__main__":
@@ -14,20 +15,21 @@ if __name__ == "__main__":
         thread_series = threading.Thread(target=tmdb_upsert_series, kwargs={"parts": 10, "only_new": False})
         thread_games =  threading.Thread(target=igdb_upsert_games,  kwargs={"parts": 4})
         thread_music =  threading.Thread(target=musicbrainz_upsert_music, kwargs={"dump_date": "LATEST", "parts": 4})
-
+        thread_books =  threading.Thread(target=openlibrary_upsert_books, kwargs={"dump_type": "editions", "parts": 4, "auto_download": True, "only_new": True})
 
         # Start the threads
         thread_movies.start()
         thread_series.start()
         thread_games.start()
         thread_music.start()
+        thread_books.start()
 
         # Wait for the update thread to finish
         thread_movies.join()
         thread_series.join()
         thread_games.join()
         thread_music.join()
-                
+        thread_books.join()
 
     except Exception as e:
         print(f"Error processing conjecture: {e}")

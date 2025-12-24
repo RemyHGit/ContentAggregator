@@ -24,6 +24,8 @@ dag = DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['musicbrainz', 'music', 'mongodb'],
+    schedule_interval=timedelta(days=1),
+
 )
 
 def sync_music_task(**context):

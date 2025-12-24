@@ -7,6 +7,7 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - app_data:/opt/airflow/app
 
 services:
   postgres:
@@ -83,3 +84,4 @@ services:
 volumes:
   postgres_db:
   mongo_data:
+  app_data:

@@ -24,7 +24,7 @@ dag = DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['openlibrary', 'books', 'mongodb'],
-    schedule_interval=None,  # Manual trigger only - dumps are large
+    schedule_interval=timedelta(days=7),
 )
 
 def sync_books_task(**context):

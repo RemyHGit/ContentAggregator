@@ -29,6 +29,7 @@ if not DB_NAME:
     raise RuntimeError("DB_NAME is not set in your .env")
 
 COLLECTION = "tmdb_movies"
+APP_DIR = "/opt/airflow/app"
 
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
 
@@ -67,10 +68,11 @@ def fetch_db_movies():
 # files
 def fetch_most_recent_file():
     """Returns the path to the most recent movie IDs file (fN.json)"""
-    if not os.path.exists("app/movies_files"):
-        os.makedirs("app/movies_files")
+    movies_dir = f"{APP_DIR}/movies_files"
+    if not os.path.exists(movies_dir):
+        os.makedirs(movies_dir)
     
-    files = glob.glob(os.path.join(os.curdir, "app/movies_files", "f*.json"))
+    files = glob.glob(os.path.join(movies_dir, "f*.json"))
 
     if not files:
         print("fetch_most_recent_file: No files found")
@@ -81,10 +83,11 @@ def fetch_most_recent_file():
 
 def fetch_most_recent_file_name():
     """Returns the name (without extension) of the most recent movie IDs file"""
-    if not os.path.exists("app/movies_files"):
-        os.makedirs("app/movies_files")
+    movies_dir = f"{APP_DIR}/movies_files"
+    if not os.path.exists(movies_dir):
+        os.makedirs(movies_dir)
     
-    files = glob.glob(os.path.join(os.path.abspath(os.curdir), "app/movies_files", "f*.json"))
+    files = glob.glob(os.path.join(movies_dir, "f*.json"))
 
     if not files:
         return None
@@ -304,12 +307,14 @@ def dl_recent_movie_ids():
             )
 
         # Combine the responses directly into the final file
-        with open(f"{os.curdir}/app/movies_files/{f}", "wb") as f_out:
+        movies_dir = f"{APP_DIR}/movies_files"
+        os.makedirs(movies_dir, exist_ok=True)
+        with open(f"{movies_dir}/{f}", "wb") as f_out:
             f_out.write(gzip.decompress(response.content))
             f_out.write(gzip.decompress(response_a.content))
 
         # Check if there are more than 2 files in the directoryn, delete the oldest one
-        files = glob.glob(os.path.join(os.curdir + "/app/movies_files/", "f*.json"))
+        files = glob.glob(os.path.join(movies_dir, "f*.json"))
         if len(files) > 2:
             files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
             os.remove(files[0])

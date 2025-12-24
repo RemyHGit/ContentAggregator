@@ -1,4 +1,4 @@
-import os, sys, json, gzip, lzma, math, requests, tarfile, re
+import os, sys, json, gzip, lzma, math, requests, tarfile, re, shutil
 from pathlib import Path
 from pymongo import MongoClient, UpdateOne, ASCENDING
 from datetime import datetime
@@ -20,7 +20,8 @@ if not DB_NAME:
     raise RuntimeError("DB_NAME is not set in your .env")
 
 COLLECTION = "musicbrainz_music"
-DATA_DIR = Path("app/musicbrainz")
+APP_DIR = "/opt/airflow/app"
+DATA_DIR = Path(f"{APP_DIR}/musicbrainz")
 DATA_DIR.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
 DUMP_BASE_URL = "https://data.metabrainz.org/pub/musicbrainz/data/json-dumps"
@@ -111,6 +112,45 @@ def extract_tar_xz(tar_path: Path, extract_to: Path = None):
         print(f"[ERROR] Failed to extract {tar_path.name}: {e}")
         raise
 
+def cleanup_old_musicbrainz_dumps(keep_latest: int = 1):
+    """Delete old MusicBrainz dump directories, keeping only the N most recent ones"""
+    if not DATA_DIR.exists():
+        return
+    
+    # Get all dump directories (excluding 'summary' and other non-dump dirs)
+    dump_dirs = [d for d in DATA_DIR.iterdir() if d.is_dir() and d.name != "summary"]
+    
+    if len(dump_dirs) <= keep_latest:
+        print(f"[CLEANUP] Only {len(dump_dirs)} dump(s) found, keeping all (limit: {keep_latest})")
+        return
+    
+    # Sort by name (which contains date) in descending order
+    dump_dirs.sort(key=lambda x: x.name, reverse=True)
+    
+    # Keep the N most recent, delete the rest
+    dirs_to_delete = dump_dirs[keep_latest:]
+    
+    if not dirs_to_delete:
+        return
+    
+    print(f"[CLEANUP] Found {len(dump_dirs)} dump(s), keeping {keep_latest} most recent, deleting {len(dirs_to_delete)} old dump(s)...")
+    
+    total_size_freed = 0
+    for dump_dir in dirs_to_delete:
+        try:
+            # Calculate size before deletion
+            dir_size = sum(f.stat().st_size for f in dump_dir.rglob('*') if f.is_file())
+            total_size_freed += dir_size
+            
+            # Delete the entire directory
+            shutil.rmtree(dump_dir)
+            print(f"[CLEANUP] Deleted old dump: {dump_dir.name} ({dir_size / (1024**3):.2f} GB)")
+        except Exception as e:
+            print(f"[CLEANUP] Error deleting {dump_dir.name}: {e}")
+    
+    if total_size_freed > 0:
+        print(f"[CLEANUP] Total space freed: {total_size_freed / (1024**3):.2f} GB")
+
 def download_and_extract_dump(dump_date: str = None):
     """Download and extract release-group dump from MusicBrainz"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -158,6 +198,10 @@ def download_and_extract_dump(dump_date: str = None):
                 print(f"[INFO] Extraction complete. File is at {release_group_file}")
             else:
                 print(f"[INFO] Extraction complete. Check {dump_dir / 'mbdump' / 'release-group'}")
+            
+            # Cleanup old dumps after successful extraction
+            cleanup_old_musicbrainz_dumps(keep_latest=1)
+            
             return dump_date
         except Exception as e:
             print(f"[ERROR] Failed to extract dump: {e}")
@@ -482,7 +526,7 @@ def sync_music_threaded(dump_date: str = None, parts: int = 4, auto_download: bo
             if mbdump_dir.exists():
                 files_in_dir = list(mbdump_dir.iterdir())
                 print(f"[DEBUG] Files/dirs in mbdump directory: {[f.name for f in files_in_dir]}")
-            print("[INFO] Make sure the dump has been extracted. Check: app/musicbrainz/{dump_date}/mbdump/release-group")
+            print(f"[INFO] Make sure the dump has been extracted. Check: {APP_DIR}/musicbrainz/{dump_date}/mbdump/release-group")
             return
     
     print(f"[INFO] Found {len(release_group_files)} release-group file(s)")

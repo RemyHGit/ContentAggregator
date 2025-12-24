@@ -5,6 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import threading
 from queue import Queue
+import shutil
 
 # Handle gzip.BadGzipFile for Python < 3.8
 try:
@@ -26,7 +27,8 @@ if not DB_NAME:
     raise RuntimeError("DB_NAME is not set in your .env")
 
 COLLECTION = "openlibrary_books"
-DATA_DIR = Path("app/openlibrary")
+APP_DIR = "/opt/airflow/app"
+DATA_DIR = Path(f"{APP_DIR}/openlibrary")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 OPEN_LIBRARY_DUMP_BASE_URL = "https://openlibrary.org/data"
@@ -123,6 +125,23 @@ def download_file(url: str, dest_path: Path, chunk_size: int = 8192, max_retries
     
     return False
 
+def cleanup_old_openlibrary_dumps(dump_type: str = "editions"):
+    """Delete old OpenLibrary dump file before downloading new one"""
+    if dump_type not in DUMP_FILES:
+        return
+    
+    filename = DUMP_FILES[dump_type]
+    dump_file = DATA_DIR / filename
+    
+    if dump_file.exists():
+        try:
+            # Calculate file size before deletion
+            file_size = dump_file.stat().st_size
+            dump_file.unlink()
+            print(f"[CLEANUP] Deleted old dump file: {filename} ({file_size / (1024**3):.2f} GB)")
+        except Exception as e:
+            print(f"[CLEANUP] Error deleting old dump file {filename}: {e}")
+
 def download_dump(dump_type: str = "editions", auto_download: bool = True, force_redownload: bool = False):
     """Download Open Library dump file"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -140,16 +159,19 @@ def download_dump(dump_type: str = "editions", auto_download: bool = True, force
         print(f"[INFO] Verifying existing file integrity...")
         if not verify_gzip_file(dump_file):
             print(f"[WARNING] Existing file appears corrupted. Will re-download.")
-            dump_file.unlink()
+            cleanup_old_openlibrary_dumps(dump_type)
         elif force_redownload:
             print(f"[INFO] Force re-download requested. Removing existing file.")
-            dump_file.unlink()
+            cleanup_old_openlibrary_dumps(dump_type)
         else:
             return dump_file
     
     if not auto_download:
         print(f"[INFO] Auto-download disabled. Please download manually: {OPEN_LIBRARY_DUMP_BASE_URL}/{filename}")
         return None
+    
+    # Cleanup old dump before downloading new one
+    cleanup_old_openlibrary_dumps(dump_type)
     
     url = f"{OPEN_LIBRARY_DUMP_BASE_URL}/{filename}"
     print(f"[INFO] Downloading {dump_type} dump from {url}")

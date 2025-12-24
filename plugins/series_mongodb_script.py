@@ -28,6 +28,7 @@ if not DB_NAME:
 headers = {"accept": "application/json", "Authorization": f"Bearer {TMDB_API_KEY}"}
 
 COLLECTION = "tmdb_series"
+APP_DIR = "/opt/airflow/app"
 
 # mongo
 def fetch_db_collection():
@@ -52,10 +53,11 @@ def fetch_series_from_mongodb():
 # files
 def fetch_most_recent_file():
     """Returns the path to the most recent series IDs file (fN.json)"""
-    if not os.path.exists("app/series_files"):
-        os.makedirs("app/series_files")
+    series_dir = f"{APP_DIR}/series_files"
+    if not os.path.exists(series_dir):
+        os.makedirs(series_dir)
 
-    files = glob.glob(os.path.join(os.curdir, "app/series_files", "f*.json"))
+    files = glob.glob(os.path.join(series_dir, "f*.json"))
 
     if not files:
         print("fetch_most_recent_file: No files found")
@@ -66,11 +68,12 @@ def fetch_most_recent_file():
 
 def fetch_most_recent_file_name():
     """Returns the name (without extension) of the most recent series IDs file"""
-    if not os.path.exists("app/series_files"):
-        os.makedirs("app/series_files")
+    series_dir = f"{APP_DIR}/series_files"
+    if not os.path.exists(series_dir):
+        os.makedirs(series_dir)
 
     files = glob.glob(
-        os.path.join(os.path.abspath(os.curdir), "app/series_files", "f*.json")
+        os.path.join(series_dir, "f*.json")
     )
 
     if not files:
@@ -218,13 +221,15 @@ def dl_recent_series_ids():
             )
 
         # Combine the responses directly into the final file
-        out_path = f"{os.curdir}/app/series_files/{f_name}"
+        series_dir = f"{APP_DIR}/series_files"
+        os.makedirs(series_dir, exist_ok=True)
+        out_path = f"{series_dir}/{f_name}"
         with open(out_path, "wb") as f_out:
             f_out.write(gzip.decompress(response.content))
             f_out.write(gzip.decompress(response_a.content))
             
         # Check if there are more than 2 files in the directoryn, delete the oldest one
-        files = glob.glob(os.path.join(os.curdir + "/app/series_files/", "f*.json"))
+        files = glob.glob(os.path.join(series_dir, "f*.json"))
         if len(files) > 2:
             files.sort(key=lambda x: int(re.search(r"f(\d+)", x).group(1)))
             os.remove(files[0])

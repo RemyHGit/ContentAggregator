@@ -24,6 +24,7 @@ dag = DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['tmdb', 'movies', 'mongodb'],
+    schedule_interval=timedelta(days=1),
 )
 
 def sync_movies_task(**context):

@@ -6,6 +6,5 @@ images/
 venv/
 *.pyc
 .DS_Store
-app/
 *.csv
 /logs

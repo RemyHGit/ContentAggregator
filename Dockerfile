@@ -10,3 +10,6 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.2/constraints-3.12.txt" \
     -r /requirements.txt
+
+# Create app directory for data files (TMDB, OpenLibrary, MusicBrainz, etc.)
+RUN mkdir -p /opt/airflow/app
