@@ -7,4 +7,5 @@ venv/
 *.pyc
 .DS_Store
 *.csv
+.vscode/
 /logs
